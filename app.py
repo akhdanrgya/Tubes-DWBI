@@ -83,7 +83,6 @@ def make_gauge(value, target, title, suffix="", color_hex="#29B5E8"):
     fig.update_layout(height=160, margin=dict(l=10, r=10, t=30, b=10))
     return fig
 
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2920/2920349.png", width=80)
 st.sidebar.title("Filter Laporan")
 st.sidebar.info("**Tahun Laporan: 2023**")
 
@@ -143,7 +142,7 @@ st.divider()
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.subheader(f"📈 Tren Transaksi Harian (Q{selected_q})")
+    st.subheader(f"Tren Transaksi Harian (Q{selected_q})")
     daily = df_curr.groupby('Full_Date')['Total_Amount'].sum().reset_index()
     if not daily.empty:
         fig_trend = px.line(daily, x='Full_Date', y='Total_Amount', markers=True, 
@@ -165,7 +164,7 @@ with col_right:
 c_b1, c_b2 = st.columns(2)
 
 with c_b1:
-    st.subheader("👥 Siapa yang Paling Boros? (Usia)")
+    st.subheader("Siapa yang Paling Boros? (Usia)")
     if not df_curr.empty:
         age_bar = df_curr.groupby('Age_Group')['Total_Amount'].sum().reset_index()
         fig_age = px.bar(age_bar, x='Age_Group', y='Total_Amount', color='Age_Group', 
@@ -173,14 +172,14 @@ with c_b1:
         st.plotly_chart(fig_age, use_container_width=True)
 
 with c_b2:
-    st.subheader("📍 Performa Cabang (Kota)")
+    st.subheader("Performa Cabang (Kota)")
     if not df_curr.empty:
         city_bar = df_curr.groupby('City')['Total_Amount'].sum().reset_index().sort_values('Total_Amount')
         fig_city = px.bar(city_bar, y='City', x='Total_Amount', orientation='h', 
                           title="Ranking Kota Berdasarkan Omzet", color='Total_Amount', color_continuous_scale='Viridis')
         st.plotly_chart(fig_city, use_container_width=True)
 
-with st.expander("📖 Baca Penjelasan Teknis KPI (Untuk Dosen)"):
+with st.expander("Baca Penjelasan Teknis KPI (Untuk Dosen)"):
     st.markdown("""
     **Catatan Target:**
     Dashboard ini fokus pada **Tahun Fiskal 2023**. 
