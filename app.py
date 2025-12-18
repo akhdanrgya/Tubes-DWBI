@@ -126,7 +126,7 @@ if not df_curr.empty:
 else:
     top_city, top_city_val = "-", 0
 
-st.title(f"👑 Laporan Kinerja Q{selected_q} - 2023")
+st.title(f"Laporan Kinerja Q{selected_q} - 2023")
 st.markdown("Evaluasi KPI per Kuartal (Target Growth: +5% QoQ)")
 
 c1, c2, c3, c4, c5 = st.columns(5)
