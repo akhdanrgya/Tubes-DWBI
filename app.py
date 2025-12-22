@@ -223,7 +223,7 @@ with col_R:
 
 c_b1, c_b2 = st.columns(2)
 with c_b1:
-    st.subheader("Produk Terlaris")
+    st.subheader("Kategori Produk Terlaris")
     if not df_curr.empty:
         fig_pie = px.pie(df_curr, values='Total_Amount', names='Product_Category', hole=0.5)
         st.plotly_chart(fig_pie, use_container_width=True)
