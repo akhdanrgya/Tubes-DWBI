@@ -1,11 +1,15 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import mysql.connector
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
 
 st.set_page_config(
-    page_title="2023 Performance Dashboard",
-    page_icon="👑",
+    page_title="Retail AI Dashboard",
     layout="wide"
 )
 
@@ -17,179 +21,215 @@ st.markdown("""
         border: 1px solid #E9ECEF;
         padding: 10px;
         border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data
-def load_data():
+@st.cache_data(ttl=600)
+def load_data_from_db():
     try:
-        df = pd.read_csv('final_data_warehouse.csv')
-        df['Full_Date'] = pd.to_datetime(df['Full_Date'])
+        conn = mysql.connector.connect(
+            host="202.10.34.23",
+            user="root",
+            password="AKJWHd898a7wd12@#jhasf",
+            database="tubes_dwbi"
+        )
         
-        df = df[df['Full_Date'].dt.year == 2023]
+        query = """
+        SELECT 
+            f.Transaction_ID, 
+            f.Customer_ID, 
+            f.Store_ID, 
+            f.Quantity, 
+            f.Total_Amount,
+            c.Age, 
+            c.Gender,
+            d.Full_Date,
+            p.Product_Category
+        FROM Fact_Sales f
+        LEFT JOIN Dim_Customer c ON f.Customer_ID = c.Customer_ID
+        LEFT JOIN Dim_Date d ON f.Date_ID = d.Date_ID
+        LEFT JOIN Dim_Product p ON f.Product_ID = p.Product_ID
+        """
         
-        df['Month'] = df['Full_Date'].dt.month_name()
-        df['Quarter'] = df['Full_Date'].dt.quarter
-        
-        def classify_age(age):
-            if age < 25: return 'Young (<25)'
-            elif age <= 50: return 'Adult (25-50)'
-            else: return 'Senior (>50)'
-        
-        if 'Age' in df.columns:
-            df['Age_Group'] = df['Age'].apply(classify_age)
-        else:
-            df['Age_Group'] = "Unknown"
-
-        store_map = {
-            'S001': 'Bekasi', 'S002': 'Solo', 'S003': 'Jakarta',
-            'S004': 'Banjarmasin', 'S005': 'Bekasi'
-        }
-        df['City'] = df['Store_ID'].map(store_map).fillna('Unknown')
+        df = pd.read_sql(query, conn)
+        conn.close()
         
         return df
-    except FileNotFoundError:
+        
+    except mysql.connector.Error as err:
+        st.error(f"Gagal Connect ke Database Error: {err}")
         return None
 
-df = load_data()
-if df is None:
-    st.error("File 'final_data_warehouse.csv' gak ketemu! Pastikan satu folder sama app.py")
-    st.stop()
+def process_data(df):
+    if df is None or df.empty: return None
 
-if df.empty:
-    st.error("Data 2023 kosong! Cek file CSV lo.")
-    st.stop()
+    df['Full_Date'] = pd.to_datetime(df['Full_Date'])
+    df['Total_Amount'] = df['Total_Amount'].astype(float)
+    df['Quantity'] = df['Quantity'].astype(int)
 
-def make_gauge(value, target, title, suffix="", color_hex="#29B5E8"):
-    max_val = target * 1.2 if target > 0 else (value * 1.2 if value > 0 else 100)
+    df = df[df['Full_Date'].dt.year == 2023]
     
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
-        value = value,
-        number = {'suffix': suffix, 'font': {'size': 20}, 'valueformat': ",.0f"},
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': title, 'font': {'size': 14, 'color': "gray"}},
-        delta = {'reference': target, 'relative': True, 'increasing': {'color': "green"}, 'decreasing': {'color': "red"}},
-        gauge = {
-            'axis': {'range': [None, max_val], 'tickwidth': 1},
-            'bar': {'color': color_hex},
-            'bgcolor': "white",
-            'steps': [{'range': [0, target], 'color': "#f2f2f2"}],
-            'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': target}
-        }
-    ))
-    fig.update_layout(height=160, margin=dict(l=10, r=10, t=30, b=10))
-    return fig
+    df['Month'] = df['Full_Date'].dt.month
+    df['Quarter'] = df['Full_Date'].dt.quarter
+    
+    store_map = {'S001': 'Bekasi', 'S002': 'Solo', 'S003': 'Jakarta', 'S004': 'Banjarmasin', 'S005': 'Bekasi'}
+    df['City'] = df['Store_ID'].map(store_map).fillna('Unknown')
+    
+    def classify_age(age):
+        if age < 25: return 'Young (<25)'
+        elif age <= 50: return 'Adult (25-50)'
+        else: return 'Senior (>50)'
+    df['Age_Group'] = df['Age'].apply(classify_age)
+
+    cust_stats = df.groupby('Customer_ID').agg({'Total_Amount': 'sum', 'Transaction_ID': 'count'}).reset_index()
+    
+    if len(cust_stats) >= 3:
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(cust_stats[['Total_Amount', 'Transaction_ID']])
+        kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+        cust_stats['Cluster'] = kmeans.fit_predict(X_scaled)
+        
+        cluster_means = cust_stats.groupby('Cluster')['Total_Amount'].mean().sort_values()
+        labels = ['Hemat', 'Reguler', 'Sultan']
+        mapping = {k: v for k, v in zip(cluster_means.index, labels)}
+        cust_stats['Category'] = cust_stats['Cluster'].map(mapping)
+        
+        df = df.merge(cust_stats[['Customer_ID', 'Category']], on='Customer_ID', how='left')
+    else:
+        df['Category'] = 'Unknown'
+
+    return df
+
+raw_df = load_data_from_db()
+df = process_data(raw_df)
+
+if df is None:
+    st.stop()
+
+
+df_display = df[df['Quarter'] != 1]
 
 st.sidebar.title("Filter Laporan")
-st.sidebar.info("**Tahun Laporan: 2023**")
 
-avail_qs = sorted(df['Quarter'].unique())
-selected_q = st.sidebar.radio("Pilih Kuartal (Quarter):", avail_qs, format_func=lambda x: f"Q{x} (2023)", index=0)
+avail_qs = sorted(df_display['Quarter'].unique())
+if not avail_qs:
+    st.warning("Data kosong atau belum ada data Q2-Q4 di database.")
+    st.stop()
+    
+selected_q = st.sidebar.radio("Pilih Kuartal (2023):", avail_qs, format_func=lambda x: f"Q{x}", index=0)
 
-df_curr = df[df['Quarter'] == selected_q]
+df_curr = df_display[df_display['Quarter'] == selected_q]
+df_prev = df[df['Quarter'] == (selected_q - 1)]
 
-if selected_q == 1:
-    df_prev = pd.DataFrame() 
-else:
-    df_prev = df[df['Quarter'] == (selected_q - 1)]
+def get_prediction(current_df):
+    if current_df.empty: return 0, 0, pd.DataFrame()
+    daily_sales = current_df.groupby('Full_Date')['Total_Amount'].sum().reset_index()
+    daily_sales['Day_Index'] = range(1, len(daily_sales) + 1)
+    
+    if len(daily_sales) > 1:
+        model = LinearRegression()
+        model.fit(daily_sales[['Day_Index']], daily_sales['Total_Amount'])
+        future_days = np.array([[len(daily_sales) + i] for i in range(1, 31)])
+        forecast = model.predict(future_days)
+        total_forecast = forecast.sum()
+        
+        last_date = daily_sales['Full_Date'].iloc[-1]
+        future_dates = [last_date + pd.DateOffset(days=i) for i in range(1, 31)]
+        df_forecast = pd.DataFrame({'Full_Date': future_dates, 'Total_Amount': forecast, 'Type': 'Forecast'})
+        daily_sales['Type'] = 'Actual'
+        combined = pd.concat([daily_sales, df_forecast])
+        return total_forecast, model.coef_[0], combined
+    return 0, 0, pd.DataFrame()
 
+pred_val, trend_val, df_trend = get_prediction(df_curr)
+trend_status = "Naik" if trend_val > 0 else "Turun"
 
 act_rev = df_curr['Total_Amount'].sum()
 tgt_rev = df_prev['Total_Amount'].sum() * 1.05 if not df_prev.empty else act_rev
 
 if not df_curr.empty:
-    cat_stats = df_curr.groupby('Product_Category')['Total_Amount'].sum()
-    top_cat = cat_stats.idxmax()
-    top_cat_pct = (cat_stats.max() / act_rev) * 100
+    top_cat = df_curr.groupby('Product_Category')['Total_Amount'].sum().idxmax()
+    top_age = df_curr.groupby('Age_Group')['Total_Amount'].sum().idxmax()
+    top_city = df_curr.groupby('City')['Total_Amount'].sum().idxmax()
+    
+    rev_male = df_curr[df_curr['Gender']=='Male']['Total_Amount'].sum()
+    rev_female = df_curr[df_curr['Gender']=='Female']['Total_Amount'].sum()
+    
+    if rev_male > rev_female:
+        dom_gender = "Pria"
+        diff_pct = ((rev_male - rev_female) / rev_female) * 100 if rev_female > 0 else 100
+        delta_msg = f"Dominan +{diff_pct:.0f}%"
+    elif rev_female > rev_male:
+        dom_gender = "Wanita"
+        diff_pct = ((rev_female - rev_male) / rev_male) * 100 if rev_male > 0 else 100
+        delta_msg = f"Dominan +{diff_pct:.0f}%"
+    else:
+        dom_gender = "Seimbang"
+        delta_msg = "Sama Kuat"
 else:
-    top_cat, top_cat_pct = "-", 0
+    top_cat, dom_gender, top_age, top_city = "-", "-", "-", "-"
+    delta_msg, rev_male, rev_female = "", 0, 0
 
-male_avg = df_curr[df_curr['Gender']=='Male']['Total_Amount'].mean() if not df_curr[df_curr['Gender']=='Male'].empty else 0
-fem_avg = df_curr[df_curr['Gender']=='Female']['Total_Amount'].mean() if not df_curr[df_curr['Gender']=='Female'].empty else 0
-ratio_gender = (male_avg / fem_avg) if fem_avg > 0 else 0
-ratio_str = f"{ratio_gender:.2f}x" if fem_avg > 0 else "N/A"
+def make_gauge(value, target, title):
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number+delta", value = value,
+        number = {'valueformat': ",.0f"},
+        title = {'text': title, 'font': {'size': 14, 'color': "gray"}},
+        delta = {'reference': target, 'relative': True},
+        gauge = {
+            'axis': {'range': [None, target*1.2]}, 
+            'bar': {'color': "#00CC96"},
+            'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': target}
+        }
+    ))
+    fig.update_layout(height=150, margin=dict(l=10, r=10, t=30, b=10))
+    return fig
 
-if not df_curr.empty:
-    age_grp = df_curr.groupby('Age_Group')['Total_Amount'].sum()
-    top_age = age_grp.idxmax()
-    top_age_val = age_grp.max()
-else:
-    top_age, top_age_val = "-", 0
-
-if not df_curr.empty:
-    city_grp = df_curr.groupby('City')['Total_Amount'].sum()
-    top_city = city_grp.idxmax()
-    top_city_val = city_grp.max()
-else:
-    top_city, top_city_val = "-", 0
-
-st.title(f"Laporan Kinerja Q{selected_q} - 2023")
-st.markdown("Evaluasi KPI per Kuartal (Target Growth: +5% QoQ)")
+st.title(f"Dashboard Q{selected_q}")
+st.markdown(f"**Status Prediksi:** Tren bulan depan diprediksi **{trend_status}**")
 
 c1, c2, c3, c4, c5 = st.columns(5)
-
-with c1: st.plotly_chart(make_gauge(act_rev, tgt_rev, "Total Revenue (Rp)", color_hex="#00CC96"), use_container_width=True)
-with c2: st.metric("Top Kategori", top_cat, f"{top_cat_pct:.1f}% Share")
-with c3: st.metric("Rasio Gender (M/F)", ratio_str, "AOV Pria vs Wanita")
-with c4: st.metric("Grup Usia Dominan", top_age, f"Rp {top_age_val:,.0f}")
-with c5: st.metric("Lokasi Juara", top_city, f"Rp {top_city_val:,.0f}")
+with c1: st.plotly_chart(make_gauge(act_rev, tgt_rev, "Revenue (Act vs Tgt)"), use_container_width=True)
+with c2: st.metric("Prediksi Revenue", f"Rp {pred_val:,.0f}", "Next 30 Days")
+with c3: st.metric("Top Kategori", top_cat)
+with c4: 
+    st.metric("Gender Dominan", dom_gender, delta_msg)
+    st.caption(f"M: {rev_male:,.0f} | F: {rev_female:,.0f}")
+with c5: st.metric("Top Lokasi", top_city)
 
 st.divider()
 
-col_left, col_right = st.columns([2, 1])
+col_L, col_R = st.columns([2, 1])
 
-with col_left:
-    st.subheader(f"Tren Transaksi Harian (Q{selected_q})")
-    daily = df_curr.groupby('Full_Date')['Total_Amount'].sum().reset_index()
-    if not daily.empty:
-        fig_trend = px.line(daily, x='Full_Date', y='Total_Amount', markers=True, 
-                            title="Grafik Detak Jantung Bisnis", color_discrete_sequence=['#636EFA'])
-        fig_trend.update_xaxes(title="Tanggal")
-        fig_trend.update_yaxes(title="Omzet (Rp)")
+with col_L:
+    st.subheader(f"Tren & Prediksi (Q{selected_q} + Next Month)")
+    if not df_trend.empty:
+        fig_trend = px.line(df_trend, x='Full_Date', y='Total_Amount', color='Type',
+                            color_discrete_map={'Actual': '#636EFA', 'Forecast': '#FFA15A'},
+                            markers=True)
         st.plotly_chart(fig_trend, use_container_width=True)
     else:
-        st.warning("Data kosong.")
+        st.warning("Data tidak cukup untuk prediksi.")
 
-with col_right:
-    st.subheader("Kontribusi Kategori")
+with col_R:
+    st.subheader("AI Segmentasi")
     if not df_curr.empty:
-        cat_pie = df_curr.groupby('Product_Category')['Total_Amount'].sum().reset_index()
-        fig_pie = px.pie(cat_pie, values='Total_Amount', names='Product_Category', hole=0.5,
-                         color_discrete_sequence=px.colors.sequential.RdBu)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        user_view = df_curr.groupby(['Customer_ID', 'Category', 'Age']).agg({'Total_Amount':'sum'}).reset_index()
+        fig_ai = px.scatter(user_view, x='Total_Amount', y='Age', color='Category',
+                            color_discrete_map={'Sultan': '#FFD700', 'Reguler': '#00BFFF', 'Hemat': '#A9A9A9'},
+                            title="Clustering User Q" + str(selected_q))
+        st.plotly_chart(fig_ai, use_container_width=True)
 
 c_b1, c_b2 = st.columns(2)
-
 with c_b1:
-    st.subheader("Siapa yang Paling Boros? (Usia)")
+    st.subheader("Produk Terlaris")
     if not df_curr.empty:
-        age_bar = df_curr.groupby('Age_Group')['Total_Amount'].sum().reset_index()
-        fig_age = px.bar(age_bar, x='Age_Group', y='Total_Amount', color='Age_Group', 
-                         title="Total Belanja per Kelompok Usia", text_auto='.2s')
-        st.plotly_chart(fig_age, use_container_width=True)
-
+        fig_pie = px.pie(df_curr, values='Total_Amount', names='Product_Category', hole=0.5)
+        st.plotly_chart(fig_pie, use_container_width=True)
 with c_b2:
-    st.subheader("Performa Cabang (Kota)")
+    st.subheader("Peta Kota")
     if not df_curr.empty:
-        city_bar = df_curr.groupby('City')['Total_Amount'].sum().reset_index().sort_values('Total_Amount')
-        fig_city = px.bar(city_bar, y='City', x='Total_Amount', orientation='h', 
-                          title="Ranking Kota Berdasarkan Omzet", color='Total_Amount', color_continuous_scale='Viridis')
-        st.plotly_chart(fig_city, use_container_width=True)
-
-with st.expander("Baca Penjelasan Teknis KPI (Untuk Dosen)"):
-    st.markdown("""
-    **Catatan Target:**
-    Dashboard ini fokus pada **Tahun Fiskal 2023**. 
-    * Target **Q1** diset *Baseline* (sama dengan Actual) karena tidak ada data 2022.
-    * Target **Q2, Q3, Q4** menggunakan metode *Quarter-on-Quarter (QoQ)* dengan ekspektasi pertumbuhan **+5%** dari kuartal sebelumnya.
-    
-    **Definisi 5 KPI:**
-    1. **Total Sales Revenue:** Indikator utama arus kas masuk (Cash In).
-    2. **Product Category Share:** Menunjukkan produk pareto (paling laku).
-    3. **Gender Ratio:** Mengukur daya beli relatif. Jika > 1, berarti Pria belanja lebih mahal per kunjungan dibanding Wanita.
-    4. **Age Group:** Segmentasi pasar berdasarkan umur (Young/Adult/Senior).
-    5. **Store Location:** Evaluasi kinerja geografis cabang.
-    """)
+        city_data = df_curr.groupby('City')['Total_Amount'].sum().reset_index().sort_values('Total_Amount')
+        fig_bar = px.bar(city_data, y='City', x='Total_Amount', orientation='h', color='Total_Amount')
+        st.plotly_chart(fig_bar, use_container_width=True)
