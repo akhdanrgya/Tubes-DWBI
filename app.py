@@ -233,3 +233,22 @@ with c_b2:
         city_data = df_curr.groupby('City')['Total_Amount'].sum().reset_index().sort_values('Total_Amount')
         fig_bar = px.bar(city_data, y='City', x='Total_Amount', orientation='h', color='Total_Amount')
         st.plotly_chart(fig_bar, use_container_width=True)
+
+c_b1, c_b2 = st.columns(2)
+with c_b1:
+    st.subheader("Siapa yang Paling Boros? (Usia)")
+    if not df_curr.empty:
+        age_bar = df_curr.groupby('Age_Group')['Total_Amount'].sum().reset_index()
+        color_map = {'Adult (25-50)': '#636EFA', 'Senior (>50)': '#1f77b4', 'Young (<25)': '#FF99CC'}
+        
+        fig_age = px.bar(age_bar, x='Age_Group', y='Total_Amount', color='Age_Group', 
+                         title="Total Belanja per Kelompok Usia", text_auto='.2s',
+                         color_discrete_map=color_map)
+        st.plotly_chart(fig_age, use_container_width=True)
+with c_b2:
+    st.subheader("Analisis Gender")
+    if not df_curr.empty:
+        gender_pie = df_curr.groupby('Gender')['Total_Amount'].sum().reset_index()
+        fig_gen = px.pie(gender_pie, values='Total_Amount', names='Gender', hole=0.5,
+                         color_discrete_sequence=['#1f77b4', '#FF99CC'])
+        st.plotly_chart(fig_gen, use_container_width=True)
